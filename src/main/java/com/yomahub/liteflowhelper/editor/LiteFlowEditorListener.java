@@ -1,5 +1,6 @@
 package com.yomahub.liteflowhelper.editor;
 
+import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.editor.event.EditorFactoryEvent;
 import com.intellij.openapi.editor.event.EditorFactoryListener;
@@ -34,12 +35,14 @@ public class LiteFlowEditorListener implements EditorFactoryListener {
             return;
         }
 
-        PsiFile psiFile = PsiManager.getInstance(project).findFile(virtualFile);
-        // 判断是否为 LiteFlow XML 文件
-        if (psiFile instanceof XmlFile && LiteFlowXmlUtil.isLiteFlowXml((XmlFile) psiFile)) {
-            // 为这个编辑器附加括号高亮管理器
-            LiteFlowBraceHighlightManager.attachTo(editor);
-        }
+        ReadAction.run(() -> {
+            PsiFile psiFile = PsiManager.getInstance(project).findFile(virtualFile);
+            // 判断是否为 LiteFlow XML 文件
+            if (psiFile instanceof XmlFile && LiteFlowXmlUtil.isLiteFlowXml((XmlFile) psiFile)) {
+                // 为这个编辑器附加括号高亮管理器
+                LiteFlowBraceHighlightManager.attachTo(editor);
+            }
+        });
     }
 
     @Override
