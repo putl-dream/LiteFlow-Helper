@@ -12,8 +12,19 @@ import java.util.regex.Pattern;
  */
 public class LiteFlowElParser {
 
-    // 用于查找 字符串字面量、注释 (//... 和 /*...*/) 以及占位符 ({{...}})
-    private static final Pattern MIXED_PATTERN = Pattern.compile("(\"([^\"\\\\]*(\\\\.[^\"\\\\]*)*)\"|'([^'\\\\]*(\\\\.[^'\\\\]*)*)')|(\\{\\{.*?\\}\\})|//[^\\n]*|/\\*.*?\\*/", Pattern.DOTALL);
+    /**
+     * 用于查找字符串字面量、注释和占位符的正则表达式
+     * 匹配优先级：字符串 > 占位符 > 注释
+     */
+    private static final Pattern MIXED_PATTERN = Pattern.compile(
+            "(\"([^\"\\\\]*(\\\\.[^\"\\\\]*)*)\"|'([^'\\\\]*(\\\\.[^'\\\\]*)]*)')|" +  // 字符串
+            "(\\{\\{[^}]*\\}\\})|" +  // 占位符 {{...}}
+            "//[^\\n]*|" +  // 行注释
+            "/\\*.*?\\*/",   // 块注释
+            Pattern.DOTALL);
+
+    /** 占位符分组索引 */
+    private static final int PLACEHOLDER_GROUP_INDEX = 6;
 
     public enum TokenType {
         STRING,
@@ -22,9 +33,9 @@ public class LiteFlowElParser {
     }
 
     public static class ElToken {
-        public TokenType type;
-        public TextRange range;
-        public String text;
+        public final TokenType type;
+        public final TextRange range;
+        public final String text;
 
         public ElToken(TokenType type, TextRange range, String text) {
             this.type = type;
@@ -34,8 +45,8 @@ public class LiteFlowElParser {
     }
 
     public static class MaskedResult {
-        public String maskedText;
-        public List<ElToken> tokens;
+        public final String maskedText;
+        public final List<ElToken> tokens;
 
         public MaskedResult(String maskedText, List<ElToken> tokens) {
             this.maskedText = maskedText;
@@ -65,41 +76,108 @@ public class LiteFlowElParser {
             String matchedText = expressionText.substring(start, end);
 
             if (matcher.group(1) != null) {
-                // 字符串
+                // 字符串：保留不屏蔽
                 tokens.add(new ElToken(TokenType.STRING, range, matchedText));
-                // 字符串不屏蔽，保持原样 (或者根据需求屏蔽内容但保留引号?)
-                // 目前逻辑是: 字符串字面量保留，不替换为空格，因为 QLExpress 需要解析字符串
                 continue;
             }
 
-            if (matcher.group(5) != null) {
+            if (matcher.group(PLACEHOLDER_GROUP_INDEX) != null) {
                 // 占位符 {{...}}
                 tokens.add(new ElToken(TokenType.PLACEHOLDER, range, matchedText));
-                // 替换 {{ 和 }} 为空格，保留中间内容
-                for (int i = start; i < end; i++) {
-                    char c = expressionText.charAt(i);
-                    if (c == '\n') {
-                        maskedExpressionBuilder.setCharAt(i, '\n');
-                    } else if (c == '{' || c == '}') {
-                        maskedExpressionBuilder.setCharAt(i, ' ');
-                    }
-                    // 中间内容保留
-                }
+                maskPlaceholder(expressionText, maskedExpressionBuilder, start, end);
             } else {
-                // 注释
+                // 注释：替换为空格
                 tokens.add(new ElToken(TokenType.COMMENT, range, matchedText));
-                // 替换为空格
-                for (int i = start; i < end; i++) {
-                    char c = expressionText.charAt(i);
-                    if (c == '\n') {
-                        maskedExpressionBuilder.setCharAt(i, '\n');
-                    } else {
-                        maskedExpressionBuilder.setCharAt(i, ' ');
-                    }
-                }
+                replaceRangeWithSpaces(expressionText, maskedExpressionBuilder, start, end);
             }
         }
 
         return new MaskedResult(maskedExpressionBuilder.toString(), tokens);
+    }
+
+    /**
+     * 检查屏蔽后的表达式是否为空或无效
+     *
+     * @param maskedText 屏蔽后的表达式
+     * @return 如果表达式为空或只包含空白字符/标点符号，返回 true
+     */
+    public static boolean isMaskedExpressionEmpty(String maskedText) {
+        if (maskedText == null) {
+            return true;
+        }
+        String trimmed = maskedText.trim();
+        if (trimmed.isEmpty() || trimmed.equals(";") || trimmed.equals(",")) {
+            return true;
+        }
+        // 检查是否只包含空白字符和标点符号
+        String contentOnly = trimmed.replaceAll("[\\s,;]+", "");
+        return contentOnly.isEmpty();
+    }
+
+    /**
+     * 屏蔽占位符及其前面的逗号（如果有）
+     */
+    private static void maskPlaceholder(String expressionText, StringBuilder maskedBuilder, int start, int end) {
+        // 检查占位符前是否有逗号
+        int actualStart = findStartIncludingComma(expressionText, start);
+
+        // 检查占位符后是否有 '='（{{var}}=value 格式）
+        int checkEnd = skipWhitespace(expressionText, end);
+        boolean isAssignment = checkEnd < expressionText.length() && expressionText.charAt(checkEnd) == '=';
+
+        if (isAssignment) {
+            // 屏蔽整个占位符赋值语句
+            int statementEnd = findStatementEnd(expressionText, checkEnd);
+            replaceRangeWithSpaces(expressionText, maskedBuilder, actualStart, statementEnd);
+        } else {
+            // 只屏蔽占位符（及前面的逗号）
+            replaceRangeWithSpaces(expressionText, maskedBuilder, actualStart, end);
+        }
+    }
+
+    /**
+     * 查找起始位置，包括前面的逗号
+     */
+    private static int findStartIncludingComma(String text, int start) {
+        int checkBefore = start - 1;
+        while (checkBefore >= 0 && Character.isWhitespace(text.charAt(checkBefore))) {
+            checkBefore--;
+        }
+        return (checkBefore >= 0 && text.charAt(checkBefore) == ',') ? checkBefore : start;
+    }
+
+    /**
+     * 跳过空白字符
+     */
+    private static int skipWhitespace(String text, int start) {
+        int pos = start;
+        while (pos < text.length() && Character.isWhitespace(text.charAt(pos))) {
+            pos++;
+        }
+        return pos;
+    }
+
+    /**
+     * 查找语句结束位置（分号或表达式结尾）
+     */
+    private static int findStatementEnd(String text, int start) {
+        int pos = start + 1;
+        while (pos < text.length()) {
+            if (text.charAt(pos) == ';') {
+                return pos + 1; // 包含分号
+            }
+            pos++;
+        }
+        return text.length();
+    }
+
+    /**
+     * 将指定范围内的字符替换为空格（保留换行符）
+     */
+    private static void replaceRangeWithSpaces(String text, StringBuilder builder, int start, int end) {
+        for (int i = start; i < end && i < text.length(); i++) {
+            char c = text.charAt(i);
+            builder.setCharAt(i, c == '\n' ? '\n' : ' ');
+        }
     }
 }

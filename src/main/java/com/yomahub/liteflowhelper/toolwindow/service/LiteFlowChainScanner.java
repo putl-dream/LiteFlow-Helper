@@ -1,10 +1,8 @@
 package com.yomahub.liteflowhelper.toolwindow.service;
 
 import com.intellij.ide.highlighter.XmlFileType;
-import com.intellij.openapi.application.ApplicationManager;
-import com.intellij.openapi.project.DumbService; // 导入DumbService
+import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.util.Computable;
 import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiFile;
@@ -14,18 +12,20 @@ import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.psi.xml.XmlFile;
 import com.intellij.psi.xml.XmlTag;
 import com.yomahub.liteflowhelper.toolwindow.model.ChainInfo;
-import com.yomahub.liteflowhelper.toolwindow.model.LiteFlowNodeInfo;
 import com.yomahub.liteflowhelper.utils.LiteFlowXmlUtil;
-import com.intellij.openapi.diagnostic.Logger; // 可选：用于日志记录
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
 
 /**
  * 负责扫描项目中的 LiteFlow Chain (流程链) 定义。
  * Chain通常在XML配置文件中定义。
  */
 public class LiteFlowChainScanner {
-    private static final Logger LOG = Logger.getInstance(LiteFlowChainScanner.class); // 可选：用于日志记录
+    private static final Logger LOG = Logger.getInstance(LiteFlowChainScanner.class);
 
     /**
      * 在项目中查找所有的 LiteFlow Chain 定义。
@@ -33,30 +33,8 @@ public class LiteFlowChainScanner {
      * @return ChainInfo 列表。如果项目处于Dumb Mode则返回空列表。
      */
     public List<ChainInfo> findChains(Project project) {
-        // 检查项目是否处于 "dumb mode" (正在索引)。
-        // 如果是，则推迟扫描，避免 IndexNotReadyException。
-        if (DumbService.getInstance(project).isDumb()) {
-            LOG.info("项目正处于 dumb mode。LiteFlow chain 扫描已推迟。");
-            return Collections.emptyList();
-        }
-
-        LOG.info("========== 开始扫描 LiteFlow Chains ==========");
-
-        // PSI访问需要在读操作中进行。
-        return ApplicationManager.getApplication().runReadAction((Computable<List<ChainInfo>>) () -> {
-            if (project.isDisposed()) { // 再次检查项目状态
-                return Collections.emptyList();
-            }
-            // 在读操作内部再次检查 dumb mode。
-            if (DumbService.getInstance(project).isDumb()) {
-                LOG.info("在为LiteFlow chain调度读操作期间，项目进入了 dumb mode。正在跳过。");
-                return Collections.emptyList();
-            }
-
+        return ScannerUtil.runInReadAction(project, "LiteFlow Chains", () -> {
             List<ChainInfo> chainInfos = new ArrayList<>();
-            // FileTypeIndex.getFiles 在 dumb mode 下对于"最新"结果应该是安全的，
-            // 但后续的PSI操作（如解析标签）可能不是。
-            // 总体的 dumb mode 检查是主要的防护。
             Collection<VirtualFile> virtualFiles = FileTypeIndex.getFiles(XmlFileType.INSTANCE, GlobalSearchScope.projectScope(project));
             PsiManager psiManager = PsiManager.getInstance(project);
 
@@ -109,7 +87,6 @@ public class LiteFlowChainScanner {
 
             // [优化] 调整为debug级别
             LOG.debug("其中 " + liteFlowXmlCount + " 个是 LiteFlow XML 配置文件");
-            LOG.info("========== 扫描完成，共找到 " + chainInfos.size() + " 个 chains ==========");
             chainInfos.sort(Comparator.comparing(ChainInfo::getName));
             return chainInfos;
         });

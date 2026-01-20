@@ -1,11 +1,8 @@
 package com.yomahub.liteflowhelper.toolwindow.service;
 
 import com.intellij.ide.highlighter.XmlFileType;
-import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
-import com.intellij.openapi.project.DumbService;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.util.Computable;
 import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.*;
@@ -49,22 +46,7 @@ public class LiteFlowNodeScanner {
      * @return LiteFlowNodeInfo 列表，如果项目处于Dumb Mode则返回空列表。
      */
     public List<LiteFlowNodeInfo> findLiteFlowNodes(@NotNull Project project) {
-        if (DumbService.getInstance(project).isDumb()) {
-            LOG.info("项目正处于 dumb mode。LiteFlow 节点扫描已推迟。");
-            return Collections.emptyList();
-        }
-
-        LOG.info("========== 开始扫描 LiteFlow 节点 ==========");
-
-        return ApplicationManager.getApplication().runReadAction((Computable<List<LiteFlowNodeInfo>>) () -> {
-            if (project.isDisposed()) {
-                return Collections.emptyList();
-            }
-            if (DumbService.getInstance(project).isDumb()) {
-                LOG.info("在为LiteFlow节点调度读操作期间，项目进入了 dumb mode。正在跳过。");
-                return Collections.emptyList();
-            }
-
+        return ScannerUtil.runInReadAction(project, "LiteFlow 节点", () -> {
             List<LiteFlowNodeInfo> nodeInfos = new ArrayList<>();
 
             // 扫描各种类型的组件
@@ -85,7 +67,6 @@ public class LiteFlowNodeScanner {
             LOG.info("声明式方法组件: " + declarativeMethodNodes.size() + " 个");
 
             nodeInfos.sort(Comparator.comparing(LiteFlowNodeInfo::getNodeId));
-            LOG.info("========== 扫描完成，共找到 " + nodeInfos.size() + " 个节点 ==========");
             return nodeInfos;
         });
     }
