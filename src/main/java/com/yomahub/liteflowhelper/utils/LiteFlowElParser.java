@@ -92,7 +92,24 @@ public class LiteFlowElParser {
             }
         }
 
-        return new MaskedResult(maskedExpressionBuilder.toString(), tokens);
+        String maskedText = maskedExpressionBuilder.toString();
+        // 清理屏蔽后可能留下的多余逗号（例如：a, ,b 或 a,,b）
+        maskedText = cleanupExtraCommas(maskedText);
+
+        return new MaskedResult(maskedText, tokens);
+    }
+
+    /**
+     * 清理屏蔽后留下的多余逗号
+     */
+    private static String cleanupExtraCommas(String text) {
+        // 替换连续的逗号为单个逗号（包括逗号中间有空格的情况）
+        String cleaned = text.replaceAll(",\\s*,", ",");
+        // 替换逗号后只跟空格和右括号的情况
+        cleaned = cleaned.replaceAll(",\\s*\\)", ")");
+        // 替换逗号后只跟空格和分号的情况
+        cleaned = cleaned.replaceAll(",\\s*;", ";");
+        return cleaned;
     }
 
     /**
