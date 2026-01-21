@@ -94,7 +94,7 @@ public class LiteFlowElParser {
 
         String maskedText = maskedExpressionBuilder.toString();
         // 清理屏蔽后可能留下的多余逗号（例如：a, ,b 或 a,,b）
-        maskedText = cleanupExtraCommas(maskedText);
+//        maskedText = cleanupExtraCommas(maskedText);
 
         return new MaskedResult(maskedText, tokens);
     }
