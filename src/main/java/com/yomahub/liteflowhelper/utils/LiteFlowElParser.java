@@ -123,10 +123,10 @@ public class LiteFlowElParser {
             return true;
         }
         String trimmed = maskedText.trim();
-        if (trimmed.isEmpty() || trimmed.equals(";") || trimmed.equals(",")) {
+        if (trimmed.isEmpty()) {
             return true;
         }
-        // 检查是否只包含空白字符和标点符号
+        // 检查是否只包含空白字符和标点符号（允许单个分号，这可能是有效的空语句）
         String contentOnly = trimmed.replaceAll("[\\s,;]+", "");
         return contentOnly.isEmpty();
     }

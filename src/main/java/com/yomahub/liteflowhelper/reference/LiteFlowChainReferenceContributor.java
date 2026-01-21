@@ -12,6 +12,7 @@ import com.ql.util.express.ExpressRunner;
 import com.yomahub.liteflowhelper.service.LiteFlowCacheService;
 import com.yomahub.liteflowhelper.toolwindow.model.ChainInfo;
 import com.yomahub.liteflowhelper.toolwindow.model.LiteFlowNodeInfo;
+import com.yomahub.liteflowhelper.utils.LiteFlowElParser;
 import com.yomahub.liteflowhelper.utils.LiteFlowXmlUtil;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -33,9 +34,6 @@ public class LiteFlowChainReferenceContributor extends PsiReferenceContributor {
 
     // 正则表达式，用于查找子变量定义 (e.g., "sub = THEN(a,b)")
     private static final Pattern SUB_VAR_DEFINITION_PATTERN = Pattern.compile("\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\s*=");
-
-    // [ 新增 ] 用于查找所有 /** ... **/ 类型注释的正则表达式
-    private static final Pattern COMMENT_PATTERN = Pattern.compile("/\\*\\*.*?\\*\\*/", Pattern.DOTALL);
 
 
     @Override
@@ -61,15 +59,9 @@ public class LiteFlowChainReferenceContributor extends PsiReferenceContributor {
                             return PsiReference.EMPTY_ARRAY;
                         }
 
-                        // --- [ 新增/修改 ] 屏蔽注释 ---
-                        StringBuilder maskedTextBuilder = new StringBuilder(text);
-                        Matcher commentMatcher = COMMENT_PATTERN.matcher(text);
-                        while (commentMatcher.find()){
-                            for(int i = commentMatcher.start(); i < commentMatcher.end(); i++){
-                                maskedTextBuilder.setCharAt(i, ' ');
-                            }
-                        }
-                        String maskedText = maskedTextBuilder.toString();
+                        // --- 屏蔽注释和占位符 ---
+                        LiteFlowElParser.MaskedResult maskedResult = LiteFlowElParser.parse(text);
+                        String maskedText = maskedResult.maskedText;
                         // --- 屏蔽结束 ---
 
 
