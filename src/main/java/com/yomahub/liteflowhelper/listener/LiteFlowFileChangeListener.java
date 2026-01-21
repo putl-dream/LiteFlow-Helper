@@ -7,6 +7,8 @@ import com.intellij.openapi.progress.ProgressManager;
 import com.intellij.openapi.progress.Task;
 import com.intellij.openapi.project.DumbService;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.roots.ProjectFileIndex;
+import com.intellij.openapi.roots.ProjectRootManager;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.openapi.vfs.newvfs.BulkFileListener;
 import com.intellij.openapi.vfs.newvfs.events.VFileEvent;
@@ -78,27 +80,29 @@ public class LiteFlowFileChangeListener implements BulkFileListener {
 
     /**
      * 判断文件是否与 LiteFlow 相关（Java 组件文件或 XML 配置文件）
-     * [性能优化] 添加更精准的文件过滤，减少不必要的缓存刷新
+     * [性能优化] 使用 ProjectFileIndex 进行更精准的文件过滤
      */
     private boolean isRelevantFile(VirtualFile file) {
-        if (file.isDirectory()) {
+        if (file.isDirectory() || !file.isValid()) {
+            return false;
+        }
+
+        // 使用 ProjectFileIndex 检查文件是否属于项目内容
+        ProjectFileIndex fileIndex = ProjectRootManager.getInstance(project).getFileIndex();
+        if (!fileIndex.isInContent(file)) {
             return false;
         }
 
         String extension = file.getExtension();
+        if (extension == null) {
+            return false;
+        }
 
         // 检查是否是 Java 文件（可能是组件类）
         if ("java".equalsIgnoreCase(extension)) {
-            // [优化] 排除明显不相关的目录
-            String path = file.getPath();
-            // 排除测试目录、生成代码目录等
-            if (path.contains("/test/") ||
-                path.contains("/generated/") ||
-                path.contains("/build/") ||
-                path.contains("/target/")) {
-                return false;
-            }
-            return true;
+            // 只关注源码目录中的 Java 文件 (包括测试源码)
+            // 排除生成代码、构建目录等非源码内容
+            return fileIndex.isInSourceContent(file);
         }
 
         // 检查是否是 XML 文件（可能是 LiteFlow 规则配置）
@@ -107,9 +111,9 @@ public class LiteFlowFileChangeListener implements BulkFileListener {
             String name = file.getName().toLowerCase();
             // 包含 flow、liteflow、chain 或 rule 关键字的 XML 文件更可能是 LiteFlow 配置
             return name.contains("flow") ||
-                   name.contains("liteflow") ||
-                   name.contains("chain") ||
-                   name.contains("rule");
+                    name.contains("liteflow") ||
+                    name.contains("chain") ||
+                    name.contains("rule");
         }
 
         return false;
@@ -142,29 +146,25 @@ public class LiteFlowFileChangeListener implements BulkFileListener {
 
             @Override
             public void run(@NotNull ProgressIndicator indicator) {
-                try {
-                    LOG.info("开始扫描 LiteFlow 组件...");
-                    indicator.setIndeterminate(false);
-                    indicator.setFraction(0.0);
+                LOG.info("开始扫描 LiteFlow 组件...");
+                indicator.setIndeterminate(false);
+                indicator.setFraction(0.0);
 
-                    LiteFlowChainScanner chainScanner = new LiteFlowChainScanner();
-                    LiteFlowNodeScanner nodeScanner = new LiteFlowNodeScanner();
+                LiteFlowChainScanner chainScanner = new LiteFlowChainScanner();
+                LiteFlowNodeScanner nodeScanner = new LiteFlowNodeScanner();
 
-                    indicator.setText("正在扫描 Chains...");
-                    foundChains = chainScanner.findChains(project);
-                    indicator.setFraction(0.5);
+                indicator.setText("正在扫描 Chains...");
+                foundChains = chainScanner.findChains(project);
+                indicator.setFraction(0.5);
 
-                    indicator.checkCanceled();
+                indicator.checkCanceled();
 
-                    indicator.setText("正在扫描 Nodes...");
-                    foundNodes = nodeScanner.findLiteFlowNodes(project);
-                    indicator.setFraction(1.0);
+                indicator.setText("正在扫描 Nodes...");
+                foundNodes = nodeScanner.findLiteFlowNodes(project);
+                indicator.setFraction(1.0);
 
-                    LOG.info("扫描完成：找到 " + foundChains.size() + " 个 chains 和 "
-                            + foundNodes.size() + " 个 nodes");
-                } catch (Exception e) {
-                    LOG.error("扫描 LiteFlow 组件时发生错误", e);
-                }
+                LOG.info("扫描完成：找到 " + foundChains.size() + " 个 chains 和 "
+                        + foundNodes.size() + " 个 nodes");
             }
 
             @Override

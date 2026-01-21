@@ -15,12 +15,9 @@ import com.intellij.psi.xml.XmlTag;
 import com.yomahub.liteflowhelper.toolwindow.model.LiteFlowNodeInfo;
 import com.yomahub.liteflowhelper.toolwindow.model.NodeType;
 import com.yomahub.liteflowhelper.utils.LiteFlowXmlUtil;
-import org.apache.commons.collections.CollectionUtils;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.*;
-import java.util.function.Predicate;
-import java.util.stream.Collectors;
 
 /**
  * 负责扫描项目中的 LiteFlow 节点定义。
@@ -49,22 +46,20 @@ public class LiteFlowNodeScanner {
         return ScannerUtil.runInReadAction(project, "LiteFlow 节点", () -> {
             List<LiteFlowNodeInfo> nodeInfos = new ArrayList<>();
 
-            // 扫描各种类型的组件
+            // 扫描继承式组件
             List<LiteFlowNodeInfo> inheritanceNodes = findJavaClassInheritanceNodes(project);
             nodeInfos.addAll(inheritanceNodes);
             LOG.info("继承式组件: " + inheritanceNodes.size() + " 个");
 
+            // 扫描XML脚本组件
             List<LiteFlowNodeInfo> xmlNodes = findXmlScriptNodes(project);
             nodeInfos.addAll(xmlNodes);
             LOG.info("XML脚本组件: " + xmlNodes.size() + " 个");
 
-            List<LiteFlowNodeInfo> declarativeClassNodes = findDeclarativeClassNodes(project);
-            nodeInfos.addAll(declarativeClassNodes);
-            LOG.info("声明式类组件: " + declarativeClassNodes.size() + " 个");
-
-            List<LiteFlowNodeInfo> declarativeMethodNodes = findDeclarativeMethodNodes(project);
-            nodeInfos.addAll(declarativeMethodNodes);
-            LOG.info("声明式方法组件: " + declarativeMethodNodes.size() + " 个");
+            // 扫描声明式组件 (合并了类和方法扫描，提高效率)
+            List<LiteFlowNodeInfo> declarativeNodes = findDeclarativeNodes(project);
+            nodeInfos.addAll(declarativeNodes);
+            LOG.info("声明式组件: " + declarativeNodes.size() + " 个");
 
             nodeInfos.sort(Comparator.comparing(LiteFlowNodeInfo::getNodeId));
             return nodeInfos;
@@ -79,6 +74,9 @@ public class LiteFlowNodeScanner {
         JavaPsiFacade psiFacade = JavaPsiFacade.getInstance(project);
         GlobalSearchScope projectScope = GlobalSearchScope.projectScope(project);
         GlobalSearchScope allScope = GlobalSearchScope.allScope(project);
+
+        // [优化] 预先获取 NodeComponent 基类，避免在循环中重复查找
+        PsiClass nodeComponentBaseClass = psiFacade.findClass(LiteFlowXmlUtil.NODE_COMPONENT_CLASS, allScope);
 
         // [优化] 调整为debug级别
         LOG.debug("开始扫描继承式组件，基类列表: " + String.join(", ", LITEFLOW_BASE_CLASSES));
@@ -105,8 +103,8 @@ public class LiteFlowNodeScanner {
 
                 LOG.debug("检查类: " + (inheritor.getQualifiedName() != null ? inheritor.getQualifiedName() : inheritor.getName()));
 
-                // [重构] 使用工具类进行判断
-                if (LiteFlowXmlUtil.isInheritanceComponent(inheritor)) {
+                // [重构] 使用优化后的工具类方法，传入预获取的基类
+                if (LiteFlowXmlUtil.isInheritanceComponent(inheritor, nodeComponentBaseClass)) {
                     String nodeIdFromAnnotation = LiteFlowXmlUtil.getNodeIdFromComponentAnnotations(inheritor);
                     String nodeName = inheritor.getName();
                     String primaryId = nodeIdFromAnnotation != null ? nodeIdFromAnnotation : LiteFlowXmlUtil.convertClassNameToCamelCase(nodeName);
@@ -152,7 +150,6 @@ public class LiteFlowNodeScanner {
         if (liteflowAnnotation != null) {
             Collection<PsiClass> lfComponents = AnnotatedElementsSearch.searchPsiClasses(liteflowAnnotation, projectScope).findAll();
             candidates.addAll(lfComponents);
-            // [优化] 调整为debug级别
             LOG.debug("找到 " + lfComponents.size() + " 个 @LiteflowComponent 标注的类");
         } else {
             LOG.warn("未找到 @LiteflowComponent 注解类，可能是 LiteFlow 依赖未正确加载");
@@ -163,7 +160,6 @@ public class LiteFlowNodeScanner {
         if (springAnnotation != null) {
             Collection<PsiClass> springComponents = AnnotatedElementsSearch.searchPsiClasses(springAnnotation, projectScope).findAll();
             candidates.addAll(springComponents);
-            // [优化] 调整为debug级别
             LOG.debug("找到 " + springComponents.size() + " 个 @Component 标注的类");
         } else {
             LOG.warn("未找到 @Component 注解类");
@@ -173,111 +169,91 @@ public class LiteFlowNodeScanner {
     }
 
     /**
-     * 扫描声明式的类组件
+     * [重构] 扫描声明式组件 (合并类组件和方法组件扫描)
      */
-    private List<LiteFlowNodeInfo> findDeclarativeClassNodes(@NotNull Project project) {
-        List<LiteFlowNodeInfo> declarativeNodeInfos = new ArrayList<>();
+    private List<LiteFlowNodeInfo> findDeclarativeNodes(@NotNull Project project) {
+        List<LiteFlowNodeInfo> nodeInfos = new ArrayList<>();
+        LOG.info("开始扫描声明式组件...");
 
-        LOG.info("开始扫描声明式类组件...");
+        // 1. 获取所有候选类 (带有 @LiteflowComponent 或 @Component 的类)
+        Set<PsiClass> candidateClasses = findCandidateComponentClasses(project);
 
-        // [重构] 使用提取的公共方法获取候选类
-        Set<PsiClass> matchedClasses = findCandidateComponentClasses(project);
-
-        if (CollectionUtils.isEmpty(matchedClasses)){
+        if (candidateClasses.isEmpty()) {
             LOG.warn("未找到任何带组件注解的类");
             return Collections.emptyList();
         }
 
-        // [优化] 调整为debug级别
-        LOG.debug("共找到 " + matchedClasses.size() + " 个候选组件类，开始筛选声明式类组件...");
+        LOG.debug("共找到 " + candidateClasses.size() + " 个候选组件类，开始筛选...");
 
-        for (PsiClass psiClass : matchedClasses) {
-            if (project.isDisposed()) {
-                return Collections.emptyList();
-            }
-
-            LOG.debug("检查候选类: " + (psiClass.getQualifiedName() != null ? psiClass.getQualifiedName() : psiClass.getName()));
-
-            // [重构] 使用工具类进行判断
-            if (LiteFlowXmlUtil.isClassDeclarativeComponent(psiClass)) {
-                String nodeId = LiteFlowXmlUtil.getNodeIdFromComponentAnnotations(psiClass);
-                if (nodeId == null) {
-                    nodeId = LiteFlowXmlUtil.convertClassNameToCamelCase(psiClass.getName());
-                }
-
-                // [优化] 使用 StringUtil 统一空值检查
-                if (StringUtil.isEmpty(nodeId)) {
-                    LOG.warn("跳过声明式类组件，无法确定Node ID: " + psiClass.getQualifiedName());
-                    continue;
-                }
-
-                // 因为 isClassDeclarativeComponent 已确保所有 @LiteflowMethod 的 nodeType 相同，我们可以安全地取第一个
-                String nodeTypeStr = "COMMON"; // 默认值
-                for(PsiMethod method : psiClass.getMethods()){
-                    PsiAnnotation annotation = method.getAnnotation(LiteFlowXmlUtil.LITEFLOW_METHOD_ANNOTATION);
-                    if(annotation != null){
-                        nodeTypeStr = LiteFlowXmlUtil.getAnnotationEnumValue(annotation, "nodeType", LiteFlowXmlUtil.LITEFLOW_NODE_TYPE_ENUM_FQ);
-                        if(nodeTypeStr == null) {
-                            nodeTypeStr = "COMMON";
-                        }
-                        break; // 找到第一个就够了
-                    }
-                }
-
-                NodeType nodeType = NodeType.fromDeclarativeNodeType(nodeTypeStr);
-                String nodeName = psiClass.getName();
-                declarativeNodeInfos.add(new LiteFlowNodeInfo(nodeId, nodeName, nodeType, psiClass, "类声明式"));
-                // [优化] 调整为debug级别
-                LOG.debug("找到声明式类组件: " + nodeId + " (" + nodeName + ")");
-            } else {
-                LOG.debug("类 " + psiClass.getName() + " 不符合声明式类组件条件");
-            }
-        }
-
-        LOG.debug("声明式类组件扫描完成，共找到 " + declarativeNodeInfos.size() + " 个组件");
-        return declarativeNodeInfos;
-    }
-
-    /**
-     * 扫描方法级别的声明式组件。
-     */
-    private List<LiteFlowNodeInfo> findDeclarativeMethodNodes(@NotNull Project project) {
-        List<LiteFlowNodeInfo> nodeInfos = new ArrayList<>();
-
-        // [重构] 使用提取的公共方法获取候选类
-        Set<PsiClass> candidateClasses = findCandidateComponentClasses(project);
-
-        if (candidateClasses.isEmpty()) {
-            return Collections.emptyList();
-        }
+        // [优化] 预先获取 NodeComponent 基类，用于在循环中快速排除继承式组件
+        PsiClass nodeComponentBaseClass = JavaPsiFacade.getInstance(project).findClass(LiteFlowXmlUtil.NODE_COMPONENT_CLASS, GlobalSearchScope.allScope(project));
 
         for (PsiClass psiClass : candidateClasses) {
             if (project.isDisposed()) {
                 return Collections.emptyList();
             }
 
-            // 检查是否为合法的声明式组件容器 (非接口、非抽象、非继承式)
-            if (psiClass.isInterface() || psiClass.isAnnotationType() || psiClass.isEnum() || psiClass.hasModifierProperty(PsiModifier.ABSTRACT)
-                    || LiteFlowXmlUtil.isInheritanceComponent(psiClass)) {
+            // 检查是否为具体的类
+            if (psiClass.isInterface() || psiClass.isAnnotationType() || psiClass.isEnum() || psiClass.hasModifierProperty(PsiModifier.ABSTRACT)) {
                 continue;
             }
 
-            for (PsiMethod method : psiClass.getMethods()) {
-                // [重构] 使用工具类进行判断
-                if (LiteFlowXmlUtil.isMethodDeclarativeComponent(method)) {
-                    PsiAnnotation lfMethodAnnotation = method.getAnnotation(LiteFlowXmlUtil.LITEFLOW_METHOD_ANNOTATION);
-                    String nodeId = LiteFlowXmlUtil.getAnnotationAttributeValue(lfMethodAnnotation, "nodeId");
-                    String nodeName = LiteFlowXmlUtil.getAnnotationAttributeValue(lfMethodAnnotation, "nodeName");
-                    String nodeTypeStr = LiteFlowXmlUtil.getAnnotationEnumValue(lfMethodAnnotation, "nodeType", LiteFlowXmlUtil.LITEFLOW_NODE_TYPE_ENUM_FQ);
-                    if (nodeTypeStr == null) {
-                        nodeTypeStr = "COMMON";
-                    }
+            // 排除继承式组件 (避免重复)
+            if (LiteFlowXmlUtil.isInheritanceComponent(psiClass, nodeComponentBaseClass)) {
+                continue;
+            }
 
+            boolean isClassDeclarative = false;
+
+            // 2. 检查是否为 "类声明式组件"
+            if (LiteFlowXmlUtil.isClassDeclarativeComponent(psiClass)) {
+                String nodeId = LiteFlowXmlUtil.getNodeIdFromComponentAnnotations(psiClass);
+                if (nodeId == null) {
+                    nodeId = LiteFlowXmlUtil.convertClassNameToCamelCase(psiClass.getName());
+                }
+
+                if (!StringUtil.isEmpty(nodeId)) {
+                    // 确定 NodeType
+                    String nodeTypeStr = "COMMON";
+                    for(PsiMethod method : psiClass.getMethods()){
+                        PsiAnnotation annotation = method.getAnnotation(LiteFlowXmlUtil.LITEFLOW_METHOD_ANNOTATION);
+                        if(annotation != null){
+                            nodeTypeStr = LiteFlowXmlUtil.getAnnotationEnumValue(annotation, "nodeType", LiteFlowXmlUtil.LITEFLOW_NODE_TYPE_ENUM_FQ);
+                            if(nodeTypeStr == null) {
+                                nodeTypeStr = "COMMON";
+                            }
+                            break;
+                        }
+                    }
                     NodeType nodeType = NodeType.fromDeclarativeNodeType(nodeTypeStr);
-                    nodeInfos.add(new LiteFlowNodeInfo(nodeId, nodeName, nodeType, method, "方法声明式"));
+                    String nodeName = psiClass.getName();
+                    nodeInfos.add(new LiteFlowNodeInfo(nodeId, nodeName, nodeType, psiClass, "类声明式"));
+                    isClassDeclarative = true; // 标记为已作为类声明式组件添加
+                }
+            }
+
+            // 3. 检查是否包含 "方法声明式组件" (如果已经识别为类声明式，通常不会再包含方法声明式，但为了完整性可以检查)
+            // LiteFlow 规则：一个类如果已经是类声明式组件，其内部的方法通常共同构成这个组件的逻辑。
+            // 但如果类本身只是一个 Bean 容器 (@Component)，内部可能有多个 @LiteflowMethod 定义不同的组件。
+            if (!isClassDeclarative) {
+                for (PsiMethod method : psiClass.getMethods()) {
+                    if (LiteFlowXmlUtil.isMethodDeclarativeComponent(method)) {
+                        PsiAnnotation lfMethodAnnotation = method.getAnnotation(LiteFlowXmlUtil.LITEFLOW_METHOD_ANNOTATION);
+                        String nodeId = LiteFlowXmlUtil.getAnnotationAttributeValue(lfMethodAnnotation, "nodeId");
+                        String nodeName = LiteFlowXmlUtil.getAnnotationAttributeValue(lfMethodAnnotation, "nodeName");
+                        String nodeTypeStr = LiteFlowXmlUtil.getAnnotationEnumValue(lfMethodAnnotation, "nodeType", LiteFlowXmlUtil.LITEFLOW_NODE_TYPE_ENUM_FQ);
+                        if (nodeTypeStr == null) {
+                            nodeTypeStr = "COMMON";
+                        }
+
+                        NodeType nodeType = NodeType.fromDeclarativeNodeType(nodeTypeStr);
+                        nodeInfos.add(new LiteFlowNodeInfo(nodeId, nodeName, nodeType, method, "方法声明式"));
+                    }
                 }
             }
         }
+
+        LOG.debug("声明式组件扫描完成，共找到 " + nodeInfos.size() + " 个组件");
         return nodeInfos;
     }
 

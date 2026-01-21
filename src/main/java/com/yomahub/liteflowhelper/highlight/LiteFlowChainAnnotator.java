@@ -143,6 +143,12 @@ public class LiteFlowChainAnnotator implements Annotator {
                 continue;
             }
 
+            // [核心修改] 忽略由 LiteFlowElParser 生成的 dummy 占位符变量
+            // 这些变量以 LiteFlowElParser.DUMMY_VAR_PREFIX (通常是 "__ph") 开头
+            if (varName.startsWith(LiteFlowElParser.DUMMY_VAR_PREFIX)) {
+                continue;
+            }
+
             // 使用正则表达式查找当前变量在屏蔽后表达式中的所有出现位置
             // \\b 是单词边界，确保不会匹配到 "a" 在 "abc" 中
             Pattern varPattern = Pattern.compile("\\b" + Pattern.quote(varName) + "\\b");
@@ -177,7 +183,15 @@ public class LiteFlowChainAnnotator implements Annotator {
         }
 
         // 4. 对子变量的定义处进行高亮
-        for (TextRange defRange : subVariableDefs.values()) {
+        for (Map.Entry<String, TextRange> entry : subVariableDefs.entrySet()) {
+            String varName = entry.getKey();
+            
+            // [核心修改] 同样忽略 dummy 占位符变量的定义高亮
+            if (varName.startsWith(LiteFlowElParser.DUMMY_VAR_PREFIX)) {
+                continue;
+            }
+
+            TextRange defRange = entry.getValue();
             holder.newSilentAnnotation(HighlightSeverity.INFORMATION)
                     .range(defRange)
                     .textAttributes(LiteFlowHighlightColorSettings.SUB_VARIABLE_KEY)

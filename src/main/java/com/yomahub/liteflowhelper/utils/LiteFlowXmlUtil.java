@@ -135,14 +135,24 @@ public class LiteFlowXmlUtil {
      * @return 如果是继承式组件则返回 true。
      */
     public static boolean isInheritanceComponent(@NotNull PsiClass psiClass) {
+        Project project = psiClass.getProject();
+        PsiClass nodeComponentBaseClass = JavaPsiFacade.getInstance(project).findClass(NODE_COMPONENT_CLASS, GlobalSearchScope.allScope(project));
+        return isInheritanceComponent(psiClass, nodeComponentBaseClass);
+    }
+
+    /**
+     * [重构] 判断一个类是否为 LiteFlow 的继承式组件 (优化版，支持传入基类)。
+     *
+     * @param psiClass 要判断的类。
+     * @param nodeComponentBaseClass NodeComponent 基类。
+     * @return 如果是继承式组件则返回 true。
+     */
+    public static boolean isInheritanceComponent(@NotNull PsiClass psiClass, @Nullable PsiClass nodeComponentBaseClass) {
         // 检查是否为具体类
         if (psiClass.isInterface() || psiClass.hasModifierProperty(PsiModifier.ABSTRACT)) {
             return false;
         }
-        // 自行获取项目和基类
-        Project project = psiClass.getProject();
-        PsiClass nodeComponentBaseClass = JavaPsiFacade.getInstance(project).findClass(NODE_COMPONENT_CLASS, GlobalSearchScope.allScope(project));
-
+        
         // 检查继承关系
         return nodeComponentBaseClass != null && psiClass.isInheritor(nodeComponentBaseClass, true);
     }

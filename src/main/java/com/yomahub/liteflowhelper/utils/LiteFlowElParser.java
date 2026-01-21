@@ -25,6 +25,9 @@ public class LiteFlowElParser {
 
     /** 占位符分组索引 */
     private static final int PLACEHOLDER_GROUP_INDEX = 6;
+    
+    /** 占位符替换前缀，用于生成合法的变量名 */
+    public static final String DUMMY_VAR_PREFIX = "__ph";
 
     public enum TokenType {
         STRING,
@@ -83,8 +86,12 @@ public class LiteFlowElParser {
 
             if (matcher.group(PLACEHOLDER_GROUP_INDEX) != null) {
                 // 占位符 {{...}}
+                // [核心修改] 将占位符替换为等长的合法变量名 (例如 __ph_______)
+                // 这样可以保留表达式结构，同时让 QLExpress 能够解析
+                // 1. 对于 {{x}}=y，解析为 __ph___=y，y 能被正确解析为变量
+                // 2. 对于 THEN(..., {{x}})，解析为 THEN(..., __ph___)，无需处理前面的逗号和注释
                 tokens.add(new ElToken(TokenType.PLACEHOLDER, range, matchedText));
-                maskPlaceholder(expressionText, maskedExpressionBuilder, start, end);
+                replacePlaceholderWithDummyVar(maskedExpressionBuilder, start, end);
             } else {
                 // 注释：替换为空格
                 tokens.add(new ElToken(TokenType.COMMENT, range, matchedText));
@@ -92,24 +99,7 @@ public class LiteFlowElParser {
             }
         }
 
-        String maskedText = maskedExpressionBuilder.toString();
-        // 清理屏蔽后可能留下的多余逗号（例如：a, ,b 或 a,,b）
-//        maskedText = cleanupExtraCommas(maskedText);
-
-        return new MaskedResult(maskedText, tokens);
-    }
-
-    /**
-     * 清理屏蔽后留下的多余逗号
-     */
-    private static String cleanupExtraCommas(String text) {
-        // 替换连续的逗号为单个逗号（包括逗号中间有空格的情况）
-        String cleaned = text.replaceAll(",\\s*,", ",");
-        // 替换逗号后只跟空格和右括号的情况
-        cleaned = cleaned.replaceAll(",\\s*\\)", ")");
-        // 替换逗号后只跟空格和分号的情况
-        cleaned = cleaned.replaceAll(",\\s*;", ";");
-        return cleaned;
+        return new MaskedResult(maskedExpressionBuilder.toString(), tokens);
     }
 
     /**
@@ -132,60 +122,38 @@ public class LiteFlowElParser {
     }
 
     /**
-     * 屏蔽占位符及其前面的逗号（如果有）
+     * 将占位符替换为合法的变量名（等长）
+     * 例如：{{abc}} (长度7) -> __ph___ (长度7)
      */
-    private static void maskPlaceholder(String expressionText, StringBuilder maskedBuilder, int start, int end) {
-        // 检查占位符前是否有逗号
-        int actualStart = findStartIncludingComma(expressionText, start);
+    private static void replacePlaceholderWithDummyVar(StringBuilder builder, int start, int end) {
+        int length = end - start;
+        if (length <= 0) return;
 
-        // 检查占位符后是否有 '='（{{var}}=value 格式）
-        int checkEnd = skipWhitespace(expressionText, end);
-        boolean isAssignment = checkEnd < expressionText.length() && expressionText.charAt(checkEnd) == '=';
-
-        if (isAssignment) {
-            // 屏蔽整个占位符赋值语句
-            int statementEnd = findStatementEnd(expressionText, checkEnd);
-            replaceRangeWithSpaces(expressionText, maskedBuilder, actualStart, statementEnd);
+        // 构建 dummy 变量名
+        // 确保以字母或下划线开头，且不包含特殊字符
+        StringBuilder dummy = new StringBuilder();
+        
+        // 复制前缀
+        dummy.append(DUMMY_VAR_PREFIX);
+        
+        // 填充剩余长度
+        while (dummy.length() < length) {
+            dummy.append('_');
+        }
+        
+        // 如果原字符串太短（虽然 {{}} 至少2字符，__ph 至少4字符），截断
+        // 实际上 {{}} 至少 2 字符，但通常会有内容。如果真的只有 {{}} (2 chars)，替换为 __
+        String replacement;
+        if (length < DUMMY_VAR_PREFIX.length()) {
+             // 极短情况，全部用下划线
+             StringBuilder shortDummy = new StringBuilder();
+             for(int i=0; i<length; i++) shortDummy.append('_');
+             replacement = shortDummy.toString();
         } else {
-            // 只屏蔽占位符（及前面的逗号）
-            replaceRangeWithSpaces(expressionText, maskedBuilder, actualStart, end);
+            replacement = dummy.substring(0, length);
         }
-    }
 
-    /**
-     * 查找起始位置，包括前面的逗号
-     */
-    private static int findStartIncludingComma(String text, int start) {
-        int checkBefore = start - 1;
-        while (checkBefore >= 0 && Character.isWhitespace(text.charAt(checkBefore))) {
-            checkBefore--;
-        }
-        return (checkBefore >= 0 && text.charAt(checkBefore) == ',') ? checkBefore : start;
-    }
-
-    /**
-     * 跳过空白字符
-     */
-    private static int skipWhitespace(String text, int start) {
-        int pos = start;
-        while (pos < text.length() && Character.isWhitespace(text.charAt(pos))) {
-            pos++;
-        }
-        return pos;
-    }
-
-    /**
-     * 查找语句结束位置（分号或表达式结尾）
-     */
-    private static int findStatementEnd(String text, int start) {
-        int pos = start + 1;
-        while (pos < text.length()) {
-            if (text.charAt(pos) == ';') {
-                return pos + 1; // 包含分号
-            }
-            pos++;
-        }
-        return text.length();
+        builder.replace(start, end, replacement);
     }
 
     /**

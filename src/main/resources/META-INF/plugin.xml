@@ -96,18 +96,9 @@
     </extensions>
 
     <projectListeners>
-        <listener class="com.yomahub.liteflowhelper.listener.LiteFlowSaveListener"
-                  topic="com.intellij.openapi.fileEditor.FileDocumentManagerListener"/>
     </projectListeners>
 
     <actions>
-        <action id="com.yomahub.liteflowhelper.action.LiteFlowFormatAction"
-                class="com.yomahub.liteflowhelper.action.LiteFlowFormatAction"
-                text="Format LiteFlow EL"
-                description="Format LiteFlow EL expressions in the current file"
-                icon="/pluginIcon.svg">
-            <add-to-group group-id="EditorPopupMenu" anchor="first"/>
-        </action>
     </actions>
 
 </idea-plugin>
